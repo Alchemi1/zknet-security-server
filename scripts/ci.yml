@@ -1,0 +1,119 @@
+# ZKN Security Audit - GitHub Actions Workflow
+# Copy to: .github/workflows/zkn-security-audit.yml
+#
+# Runs the ZKN Security Audit MCP server on every pull request
+# and push to main. Blocks PRs with critical confirmed findings.
+
+name: ZKN Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mcp-servers/zkn-security-server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: mcp-servers/zkn-security-server/
+
+      - name: Run security audit
+        id: audit
+        run: |
+          node --input-type=module -e "
+            import { ZKNScanner } from './mcp-servers/zkn-security-server/engine/scanner.mjs';
+            import { EvidenceGate } from './mcp-servers/zkn-security-server/engine/evidence.mjs';
+            import { FixGenerator } from './mcp-servers/zkn-security-server/engine/fixer.mjs';
+            import { writeFileSync } from 'fs';
+
+            const scanner = new ZKNScanner(process.cwd());
+            console.log('Scanning...');
+            const results = await scanner.scanAll((i, total) => {
+              process.stdout.write('\r  ' + i + '/' + total);
+            });
+            console.log('\nFound ' + results.length + ' files with findings');
+
+            const flat = results.flatMap(r => r.findings.map(f => ({ ...f, file: r.file })));
+            const gate = new EvidenceGate();
+            const gated = gate.gatedFindings(flat);
+            const fixer = new FixGenerator(process.cwd());
+            const plan = fixer.generateFixPlan(gated);
+
+            const report = {
+              files_scanned: results.length,
+              total_findings: plan.summary.total,
+              critical: plan.critical.length,
+              high: plan.high.length,
+              medium: plan.medium.length,
+              auto_fixable: plan.summary.autoFixable,
+              critical_findings: plan.critical.filter(f => f.evidenceLevel === 'confirmed'),
+              summary_by_category: {}
+            };
+
+            for (const f of gated) {
+              report.summary_by_category[f.category] = (report.summary_by_category[f.category] || 0) + 1;
+            }
+
+            writeFileSync('audit-report.json', JSON.stringify(report, null, 2));
+            console.log('Audit report written to audit-report.json');
+
+            if (report.critical > 0) {
+              console.log('\\nFAILED: ' + report.critical + ' critical finding(s)');
+              process.exit(1);
+            }
+          "
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zkn-security-audit
+          path: audit-report.json
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('audit-report.json', 'utf-8'));
+            const findings = report.critical_findings || [];
+            let body = '## ZKN Security Audit Results\n\n';
+            body += '| Metric | Value |\n|---|---|\n';
+            body += '| Files Scanned | ' + report.files_scanned + ' |\n';
+            body += '| Total Findings | ' + report.total_findings + ' |\n';
+            body += '| Critical | ' + report.critical + ' |\n';
+            body += '| High | ' + report.high + ' |\n';
+            body += '| Medium | ' + report.medium + ' |\n';
+            body += '| Auto-Fixable | ' + report.auto_fixable + ' |\n\n';
+
+            if (findings.length > 0) {
+              body += '### Critical Confirmed Findings\n\n';
+              body += '| Rule | File | Description |\n|---|---|---|\n';
+              for (const f of findings.slice(0, 20)) {
+                body += '| ' + f.ruleId + ' | ' + f.file + ' | ' + f.title + ' |\n';
+              }
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
