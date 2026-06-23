@@ -1,156 +1,317 @@
-# ZKNET Audit Toolkit v1
+# ZKN Security Server
 
-Automated security audit and remediation for vibe-coded applications in production. Probes codebases for 17 vulnerability categories, then applies targeted fixes.
+MCP (Model Context Protocol) server for automated ZKNetwork security auditing. Provides evidence-gated, phase-chained audit for smart contracts, ZK circuits, mixnet, infrastructure, dApps, and supply chain.
 
-Built for the ZKNetwork ecosystem. Zero external dependencies — pure Python stdlib (optional `npm` for dependency audit checks).
+Part of the **ZKNet Security Audit Toolkit** — a two-part system:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **zkn-security-server** (this) | `mcp-servers/zkn-security-server/` | MCP server + CLI for ZK-specific rule auditing (Node.js) |
+| **zknet-audit-toolkit** | `src/ETHERIX/zknet-audit-toolkit/` | Python CLI for general web/backend security scanning (17 checks) |
 
 ---
 
 ## Quick Start
 
-```
-$ git clone https://github.com/ethrx-dev/zknet-audit-toolkit.git
-$ cd zknet-audit-toolkit
-$ ln -sf "$PWD/run-audit" ~/.local/bin/zknet-audit
+```bash
+# Install dependencies
+$ npm install
 
-# Scan anything
-$ zknet-audit /path/to/project -o ./reports
+# Serve as MCP server (stdio)
+$ ./zkn-audit serve
 
-# Preview fixes (dry-run — no files touched)
-$ zknet-audit fix ./reports/audit-results.json /path/to/project --dry-run
-
-# Apply fixes
-$ zknet-audit fix ./reports/audit-results.json /path/to/project
-```
-
----
-
-## Scanner
-
-`scanner.py` walks a target directory and yields source files for analysis:
-
-| Setting | Value |
-|---------|-------|
-| Max file size | 1 MB (larger files are skipped) |
-| Excluded dirs | `.git`, `node_modules`, `__pycache__`, `.next`, `build`, `dist`, `target`, `venv`, `.venv`, `.cache`, `.npm`, `.yarn`, `coverage`, `.nyc_output`, `env`, `.env`, `site-packages`, `.tox`, `.eggs`, `eggs`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`, `.hypothesis`, `.svn` |
-| Excluded extensions | `.pyc`, `.pyo`, `.so`, `.o`, `.a`, `.lib`, `.dll`, `.dylib`, `.exe`, `.bin`, `.dat`, `.db`, `.sqlite`, `.sqlite3`, images, audio, video, archives, PDFs, Office docs, fonts, source maps, `.lock`, `.log`, `.pid` |
-| Source extensions scanned | `.py`, `.js`, `.ts`, `.jsx`, `.tsx`, `.go`, `.rs`, `.java`, `.rb`, `.php`, `.c`, `.cpp`, `.h`, `.hpp`, `.swift`, `.kt`, `.scala`, `.html`, `.vue`, `.svelte`, `.css`, `.scss`, `.sass`, `.less`, `.yaml`, `.yml`, `.json`, `.toml`, `.ini`, `.cfg`, `.conf`, `.md`, `.mdx`, `.sh`, `.bash`, `.zsh`, `.fish`, `.dockerfile`, `.env`, `.env.example`, `.mjs`, `.cjs`, `.mts`, `.cts` |
-
----
-
-## 17 Security Checks
-
-Each check module lives in `checks/` and returns a dict with `id`, `name`, `status` (PASS/FAIL), `severity` (LOW/MEDIUM/HIGH/CRITICAL), `summary`, `details`, and `findings`.
-
-| # | Check | Severity | What It Finds | Patterns Scanned |
-|---|-------|----------|---------------|-----------------|
-| 1 | Exposed Secrets | **CRITICAL** | .env in git, hard-coded keys, .env.example with real values | Stripe keys, AWS AKIA keys, SSH private keys, GitHub tokens, Slack tokens, DB connection strings, hardcoded passwords/secrets/API keys/tokens |
-| 2 | Database Access Control | LOW | Supabase RLS, Firebase rules bypassed | Supabase config files missing RLS references, Firebase rules without `auth != null`, raw SQL patterns (`.raw()`, `.query()`, `execute()`, `.sql()`) |
-| 3 | Auth Middleware | **CRITICAL** | Missing auth guards on API routes | Route definitions (FastAPI, Express, Flask, Next.js, Django), auth middleware keywords (`authenticate`, `login_required`, `jwt.verify`, `getSession`, etc.) |
-| 4 | Access Control (IDOR) | LOW | Missing ownership checks on user data | ID parameter usage (`user_id`, `params.id`, `[id]`, `:id`, `/{id}`), ownership check patterns (`owner_id`, `user_id ==`, `current_user`, `creator_id`, `request.user`) |
-| 5 | Frontend Secrets | LOW | `NEXT_PUBLIC_` / `VITE_` env vars with secrets | Public env prefixes (`NEXT_PUBLIC_`, `VITE_`, `REACT_APP_`, `NUXT_ENV_`, `GATSBY_`, `SANITY_STUDIO_`) with secret indicators |
-| 6 | SSRF | **HIGH** | URL fetching without private-IP validation | HTTP client usage (requests, urllib, httpx, fetch, axios, got, jQuery), IP blocklist patterns (`127.0.0.0/8`, `10.0.0.0/8`, `192.168.0.0/16`, `::1`) |
-| 7 | CSRF | **HIGH** | Missing SameSite or CSRF tokens on cookies | `SameSite=Lax/Strict/None`, CSRF token references, Bearer auth detection (which makes CSRF via cookies N/A) |
-| 8 | Security Headers | MEDIUM | CSP, HSTS, XFO, XCTO, Referrer-Policy | Header presence, middleware detection (helmet, Secure, CSP middleware) |
-| 9 | CORS | LOW | Wildcard ACAO, creds + wildcard | Wildcard origins (`origin: *`, `Access-Control-Allow-Origin: *`), dynamic origin reflection |
-| 10 | Rate Limiting | **HIGH** | No limits on auth endpoints | Rate limit middleware keywords (`rate_limit`, `ratelimit`, `throttle`, `limiter`, `slowapi`, `express-rate-limit`), auth endpoint detection (login, register, password-reset) |
-| 11 | SQL Injection | **HIGH** | f-string SQL, string concat in execute() | f-string SQL interpolation, `.format()` in SQL, template literals in SQL, parameterized query detection (`%s`, `?`, `:param`, `$1`) |
-| 12 | XSS | **HIGH** | dangerouslySetInnerHTML, v-html, innerHTML | `dangerouslySetInnerHTML`, `v-html`, `innerHTML=`, `.html()`, `insertAdjacentHTML`, sanitizer detection (DOMPurify, sanitize-html, xss lib), triple braces in templates |
-| 13 | Payment Webhooks | LOW | Missing Stripe sig verification | Stripe references, `construct_event` verification, idempotency handling (`idempotency_key`, `processed_events`), event lifecycle handlers (`payment_intent.succeeded`, `invoice.payment_failed`, `customer.subscription.deleted/past_due`) |
-| 14 | File Uploads | MEDIUM | No magic-byte check, no UUID rename | Upload patterns (multer, FileField, FileUpload, form-data, multipart), security measures (magic byte detection, Content-Type validation, UUID renaming, external storage, size limits) |
-| 15 | Error Handling | MEDIUM | Stack traces exposed, debug mode in prod | Debug mode flags (`debug=True`, `NODE_ENV=development`, `DEBUG=true`), error handler detection (try/except, catch, error middleware, ExceptionHandler, generic error responses) |
-| 16 | Password Hashing | LOW | MD5/SHA1 for passwords | Strong hash detection (bcrypt, argon2, scrypt), weak hash detection (MD5, SHA-1, SHA-256 for passwords), third-party auth provider detection (Auth0, Supabase Auth, Firebase Auth, Clerk, NextAuth, Passport) |
-| 17 | Dependencies | MEDIUM | Unpinned ^/~ versions, no lockfile, vulns | Package.json unpinned deps (`^`/`~`), lockfile presence, Python unpinned deps (`>=`), runs `npm audit --json` for vulnerability scanning |
-
----
-
-## Automated Fix Modules
-
-When a check fails, `zknet-audit fix` applies targeted remediation. Fixes live in `fixes/` and are orchestrated by `fixes/fixer.py`.
-
-Before any modification, the fixer **backs up every file** with a `.bak` suffix.
-
-| Module | What It Does |
-|--------|-------------|
-| secrets | Creates `.gitignore`, `.env.example`, ensures `.env` is untracked |
-| headers | Generates security-headers middleware (Express, FastAPI, Flask) or HTML meta tags |
-| cors | Restricts ACAO to explicit origin allowlist |
-| csrf | Adds SameSite cookies, CSRF token middleware |
-| rate_limiting | Generates rate-limit middleware |
-| errors | Disables DEBUG, adds generic error handler |
-| passwords | Replaces weak hashing with bcrypt/argon2 utils |
-| uploads | Adds magic-byte validation, UUID renaming |
-| webhooks | Generates Stripe webhook with signature verification |
-| ssrf | Adds private-IP blocklist before URL fetch |
-| dependencies | Pins exact versions, runs `npm audit fix` |
-
-### Framework Auto-Detection
-
-`fixes/framework.py` scans the target for:
-
-- **Node.js**: `package.json` dependencies (express, next, react, vue)
-- **Python**: `requirements.txt` or `pyproject.toml` (fastapi, django, flask)
-- **Static HTML**: fallback when no backend framework is detected and `.html` files exist
-
-Each fix module is tailored to the detected stack.
-
----
-
-## Output Reports
-
-```
-$ tree ./reports/
-├── AUDIT_SUMMARY.md       ← Human-readable markdown with per-category findings
-├── audit-results.json     ← Machine-readable JSON (feeds fix tool)
-├── FIX_REPORT.md          ← Post-fix summary with per-category status
-└── fix-results.json       ← Machine-readable fix log
+# Or use the CLI directly
+$ ./zkn-audit scan /path/to/project
+$ ./zkn-audit scan-file contract.sol
+$ ./zkn-audit rules zk-circuits
+$ ./zkn-audit rule ZKN-ZK-001
 ```
 
-### Sample Report
+### MCP Tools (via stdio)
 
-The `security/` directory contains latest audit output from scanning `zknetwork-beta-client-v1`, showing all 17 checks passing with detailed per-file findings.
+Connect this server to any MCP-compatible client (Claude, Continue, etc.) to get these tools:
+
+| Tool | Description |
+|------|-------------|
+| `zkn_audit` | Run full ZKNetwork security audit across all categories |
+| `zkn_fix` | Generate a prioritized fix plan from last audit results |
+| `zkn_scan_file` | Scan a single file against ZKNetwork security rules |
+| `zkn_preview_fix` | Preview auto-fix patches for confirmed critical findings |
+| `zkn_apply_fix` | Apply auto-fix patches to files (with dry-run) |
+| `zkn_list_rules` | List all rules, optionally filtered by category/severity |
+| `zkn_summary` | Get summary of last audit results |
+| `zkn_rule_info` | Get detailed info on a specific rule by ID |
+
+### CLI Commands
+
+```bash
+$ zkn-audit scan [path]        # Run full audit
+$ zkn-audit scan-file <file>   # Scan single file
+$ zkn-audit fix [path]         # Show fix plan
+$ zkn-audit apply [path]       # Apply auto-fixes
+$ zkn-audit rules [category]   # List rules
+$ zkn-audit rule <id>          # Show rule detail
+$ zkn-audit serve              # Start MCP server
+```
+
+Options: `--min-severity`, `--category`, `--dry-run`, `--json`, `--rule-id`, `--output`, `--quiet`
 
 ---
 
 ## Architecture
 
 ```
-zknet-audit-toolkit/
-├── run-audit                CLI entry point (subcommand-aware)
-├── audit.py                 Scanner orchestrator — runs all 17 checks, generates reports
-├── scanner.py               Centralized file iterator (exclusions, size limits, ext filtering)
-├── checks/                  17 check modules
-│   ├── secrets.py           database.py         auth_middleware.py
-│   ├── idor.py              frontend_secrets    ssrf.py
-│   ├── csrf.py              headers.py          cors.py
-│   ├── rate_limiting.py     sqli.py             xss.py
-│   ├── webhooks.py          file_upload.py      errors.py
-│   ├── passwords.py         dependencies.py
-├── fixes/                   11 fix modules + orchestrator + framework detector
-│   ├── fixer.py             Orchestrator — reads audit JSON, applies fixes, generates fix report
-│   ├── framework.py         Auto-detect stack (Express, Next.js, FastAPI, Django, Flask, React, Vue, static)
-│   └── *.py                 One fix module per category (secrets, headers, cors, csrf, etc.)
-├── reporters/               Report rendering (extensible — currently stubbed)
-├── security/                Latest audit output on zknetwork-client
-│   ├── AUDIT_SUMMARY.md
-│   └── audit-results.json
-├── reports/                 Report output directory (created on first run)
-└── README.md
+zkn-security-server/
+├── zkn-audit                 CLI entry point (bash)
+├── index.mjs                 MCP server (8 tools via @modelcontextprotocol/sdk)
+├── engine/
+│   ├── index.mjs             ZKNAuditEngine — orchestrator
+│   ├── scanner.mjs           ZKNScanner — file discovery + rule dispatch
+│   ├── evidence.mjs          EvidenceGate — evidence level classification
+│   ├── fixer.mjs             FixGenerator — fix plan + prompt generation
+│   └── patcher.mjs           PatchGenerator — auto-fix patching (Solidity)
+├── rules/
+│   ├── index.mjs             Rule registry + matcher dispatch
+│   ├── contracts.mjs         10 rules for Solidity smart contracts
+│   ├── crypto.mjs            10 rules for ZK cryptography
+│   ├── circuits.mjs          12 rules for Noir/Circom circuits
+│   ├── mixnet.mjs             8 rules for mixnet communication
+│   ├── infra.mjs              7 rules for infrastructure/deployment
+│   ├── dapp.mjs               7 rules for dApp/frontend
+│   └── supply-chain.mjs       6 rules for supply chain/dependencies
+├── scripts/
+│   ├── audit-report.mjs      View latest pre-commit audit report
+│   ├── ci.yml                GitHub Actions workflow template
+│   └── pre-commit.sh         Pre-commit hook for staged files
+├── reports/                  Audit report output directory
+└── package.json
 ```
+
+### Audit Pipeline
+
+```
+Source Files
+    │
+    ▼
+ZKNScanner.findFiles() — glob patterns for .sol, .nr, .circom, .toml, etc.
+    │
+    ▼
+ZKNScanner.scanFile() — dispatches matching rules per file
+    │
+    ▼
+60 Security Rules across 7 categories
+    │
+    ▼
+EvidenceGate.gatedFindings() — classifies findings:
+  - confirmed:   secret leak or critical + code evidence
+  - likely:      code evidence with 2+ matches
+  - plausible:   config evidence or 1+ match
+  - unconfirmed: no evidence (filtered out)
+    │
+    ▼
+FixGenerator.generateFixPlan() — priorities by severity
+    │
+    ▼
+PatchGenerator — auto-fixes for Solidity (Ownable2Step, ReentrancyGuard, SafeCast, pragma lock)
+```
+
+---
+
+## Scanner
+
+`engine/scanner.mjs` discovers files using glob patterns, excluding build artifacts and vendored dependencies.
+
+### File Patterns Scanned
+
+| Pattern | Description |
+|---------|-------------|
+| `*.sol` | Solidity smart contracts |
+| `*.circom`, `*.noir`, `*.nr` | ZK circuit source |
+| `*.toml`, `*.yaml`, `*.yml` | Config files |
+| `*.js`, `*.jsx`, `*.ts`, `*.tsx` | JavaScript/TypeScript |
+| `*.py`, `*.rs`, `*.go` | Python, Rust, Go |
+| `*.json`, `*.md`, `*.sh` | JSON, Markdown, Shell |
+| `*.env*`, `.gitignore` | Environment/secrets |
+| `hardhat.config.*` | Hardhat config |
+| `*Dockerfile*`, `*.service` | Docker, systemd |
+
+### Excluded Directories
+
+`node_modules/`, `target/`, `dist/`, `build/`, `.git/`, `cache/`, `artifacts/`, `.nargo-cache/`, `.deps/`, `out/`, `vendor/`, `third_party/`, `lib/forge-std/`, `lib/openzeppelin*/`, `generated/`, `.next/`, `coverage/`, `.nyc_output/`
+
+---
+
+## 60 Security Rules
+
+### Smart Contracts (10 rules) — `rules/contracts.mjs`
+
+| ID | Severity | Title | Fix |
+|----|----------|-------|-----|
+| ZKN-SC-001 | **CRITICAL** | Ownable Without Two-Step Transfer | Replace Ownable with Ownable2Step |
+| ZKN-SC-002 | **CRITICAL** | Missing ReentrancyGuard | Add ReentrancyGuard + nonReentrant |
+| ZKN-SC-003 | HIGH | Centralized Mint Risk | Add timelock/multi-sig + MAX_SUPPLY |
+| ZKN-SC-004 | HIGH | Centralized Pause/Role Management | Use TimelockController |
+| ZKN-SC-005 | **CRITICAL** | Unsafe Cast/Truncation | Use SafeCast library |
+| ZKN-SC-006 | HIGH | DEFAULT_ADMIN_ROLE Not Renounced | Transfer to timelock, renounce deployer |
+| ZKN-SC-007 | HIGH | Unsafe forceApprove | Use safeApprove with reset to 0 |
+| ZKN-SC-008 | MEDIUM | Inefficient Loop Patterns | Add max iteration bound |
+| ZKN-SC-009 | HIGH | Unprotected receive() | Add revert in receive() |
+| ZKN-SC-010 | MEDIUM | Floating Pragma | Lock pragma to exact version |
+
+### ZK Cryptography (10 rules) — `rules/crypto.mjs`
+
+| ID | Severity | Title | Category |
+|----|----------|-------|----------|
+| ZKN-CR-001 | **CRITICAL** | Unconstrained Public Inputs | zk-circuit |
+| ZKN-CR-002 | **CRITICAL** | ZK-PKI Trust Root Compromise | zk-pki |
+| ZKN-CR-003 | HIGH | ECDSA Nonce Reuse / Weak Nonce | ecdsa |
+| ZKN-CR-004 | **CRITICAL** | Improper ZK Proof Verification | verification |
+| ZKN-CR-005 | **CRITICAL** | Powers of Tau / Toxic Waste Handling | toxic-waste |
+| ZKN-CR-006 | HIGH | Mixnet Cryptographic Weakness | mixnet |
+| ZKN-CR-007 | HIGH | Funion AI Inference Privacy | funion |
+| ZKN-CR-008 | **CRITICAL** | Weak Hash Function Usage | hash-function |
+| ZKN-CR-009 | HIGH | HSM/Zymkey Key Management | key-management |
+| ZKN-CR-010 | MEDIUM | On-chain Randomness Source | randomness |
+
+### Noir/Circom Circuits (12 rules) — `rules/circuits.mjs`
+
+| ID | Severity | Title | Category |
+|----|----------|-------|----------|
+| ZKN-ZK-001 | **CRITICAL** | Unconstrained Public Inputs | circuit-inputs |
+| ZKN-ZK-002 | HIGH | Public Input Not Marked pub | circuit-inputs |
+| ZKN-ZK-003 | HIGH | Weak Merkle Tree Depth | merkle-tree |
+| ZKN-ZK-004 | **CRITICAL** | Missing Nullifier in Private State | nullifier |
+| ZKN-ZK-005 | HIGH | Poseidon2 Without Domain Separator | hash-collision |
+| ZKN-ZK-006 | HIGH | ECDSA Sig Without Public Key Validation | ecdsa-verification |
+| ZKN-ZK-007 | MEDIUM | Block Environment Dependency | block-env |
+| ZKN-ZK-008 | HIGH | Recursive Proof Without VK Check | recursion |
+| ZKN-ZK-009 | MEDIUM | Missing Loop Bound Constraint | loop-bounds |
+| ZKN-ZK-010 | HIGH | Unsafe Type Casting | type-safety |
+| ZKN-ZK-011 | HIGH | Unconstrained Function Used | unconstrained |
+| ZKN-ZK-012 | **CRITICAL** | Non-ZK Honk Proof in Production | honk-security |
+
+### Mixnet (8 rules) — `rules/mixnet.mjs`
+
+| ID | Severity | Title | Category |
+|----|----------|-------|----------|
+| ZKN-MX-001 | **CRITICAL** | Directory Authority Compromise | directory-auth |
+| ZKN-MX-002 | HIGH | SSH Tunnel Key Management | tunnel |
+| ZKN-MX-003 | HIGH | 5-Hop Mix Route Security | mix-route |
+| ZKN-MX-004 | HIGH | RPC Gateway Abuse Prevention | rpc-gateway |
+| ZKN-MX-005 | **CRITICAL** | PKI Client Timeout Vulnerability | pki-client |
+| ZKN-MX-006 | MEDIUM | Timing Analysis Resistance | linkability |
+| ZKN-MX-007 | HIGH | Pigeonhole Storage Security | pigeonhole |
+| ZKN-MX-008 | HIGH | WalletShield RPC Privacy | wallet-shield |
+
+### Infrastructure (7 rules) — `rules/infra.mjs`
+
+| ID | Severity | Title | Category |
+|----|----------|-------|----------|
+| ZKN-IN-001 | **CRITICAL** | Port Exposure Audit | exposure |
+| ZKN-IN-002 | HIGH | Systemd Service Hardening | service-management |
+| ZKN-IN-003 | **CRITICAL** | Autonomi Node Security | autonomi |
+| ZKN-IN-004 | HIGH | Monitoring Coverage | monitoring |
+| ZKN-IN-005 | HIGH | Backup and Disaster Recovery | backup |
+| ZKN-IN-006 | **CRITICAL** | Docker Container Security | docker |
+| ZKN-IN-007 | MEDIUM | Network Segmentation | network |
+
+### dApp (7 rules) — `rules/dapp.mjs`
+
+| ID | Severity | Title | Category |
+|----|----------|-------|----------|
+| ZKN-DA-001 | **CRITICAL** | Hardcoded Secrets in Frontend | secret-exposure |
+| ZKN-DA-002 | HIGH | Direct RPC Calls from Client | rpc-calls |
+| ZKN-DA-003 | HIGH | Client-Only Authorization | auth |
+| ZKN-DA-004 | MEDIUM | Unvalidated User Input | input-validation |
+| ZKN-DA-005 | HIGH | Outdated Critical Dependency | dependency |
+| ZKN-DA-006 | MEDIUM | CORS Configuration | cors |
+| ZKN-DA-007 | HIGH | Sensitive Data in Browser Storage | local-storage |
+
+### Supply Chain (6 rules) — `rules/supply-chain.mjs`
+
+| ID | Severity | Title |
+|----|----------|-------|
+| ZKN-SC-001 | HIGH | Unpinned Dependency Versions |
+| ZKN-SC-002 | HIGH | Missing Lockfile |
+| ZKN-SC-003 | **CRITICAL** | Outdated OpenZeppelin Contracts |
+| ZKN-SC-004 | MEDIUM | Hardhat Config Security |
+| ZKN-SC-005 | HIGH | Rust Dependency Audit |
+| ZKN-SC-006 | MEDIUM | Sensitive Files Not in .gitignore |
+
+---
+
+## Evidence Gate
+
+`engine/evidence.mjs` classifies every finding into four evidence levels:
+
+| Level | Condition |
+|-------|-----------|
+| `confirmed` | Secret leak detected, or critical severity + code match |
+| `likely` | Code match with 2+ evidence items |
+| `plausible` | Config issue or 1+ evidence item |
+| `unconfirmed` | No evidence — **filtered out** from results |
+
+Only `confirmed` + `critical` findings are eligible for auto-fix application.
+
+---
+
+## Auto-Fix Patcher
+
+`engine/patcher.mjs` provides automated fix patching for Solidity contracts:
+
+| Rule | Patch |
+|------|-------|
+| ZKN-SC-001 | `Ownable` → `Ownable2Step` (import + contract inheritance + constructor) |
+| ZKN-SC-002 | Add `ReentrancyGuard` import + inheritance + `nonReentrant` modifiers |
+| ZKN-SC-005 | Wrap unsafe casts with `SafeCast.toUint*()` + import SafeCast |
+| ZKN-SC-010 | Replace `pragma solidity ^X.Y.Z` with `pragma solidity X.Y.Z` |
+
+Patches back up the original file before modification.
+
+---
+
+## CI/CD Integration
+
+### GitHub Actions
+
+Copy `scripts/ci.yml` to `.github/workflows/zkn-security-audit.yml`. The workflow:
+
+1. Checks out code
+2. Installs dependencies
+3. Runs full security audit via node inline
+4. Uploads audit report as artifact
+5. Posts PR comment with results (on failure)
+6. **Blocks PRs with critical findings**
+
+### Pre-commit Hook
+
+```bash
+$ ln -sf ../../mcp-servers/zkn-security-server/scripts/pre-commit.sh .git/hooks/pre-commit
+```
+
+Scans only staged `.sol`, `.nr`, `.circom`, `.toml`, `.rs`, `.py` files for fast pre-commit checks. Saves reports to `reports/precommit_*.json`.
+
+---
+
+## Relationship to zknet-audit-toolkit
+
+The two tools complement each other:
+
+| Aspect | zkn-security-server | zknet-audit-toolkit |
+|--------|-------------------|-------------------|
+| Runtime | Node.js (MCP + CLI) | Python (stdlib) |
+| Focus | ZK-specific: circuits, contracts, mixnet, crypto | General: secrets, CORS, SQLi, XSS, headers |
+| Rules | 60 rules across 7 ZK-specific categories | 17 checks for web/backend security |
+| Interface | MCP protocol + bash CLI | Python CLI |
+| Evidence | 4-level evidence gating (confirmed→unconfirmed) | Simple pass/fail |
+| Fixes | Targeted Solidity patches | Code generation for middleware/config |
+
+Use **zkn-security-server** for ZKNetwork-specific auditing (circuits, contracts, mixnet).  
+Use **zknet-audit-toolkit** for general web/backend security scanning (secrets, headers, dependencies).
 
 ---
 
 ## Requirements
 
-- **Python 3.8+** (stdlib only)
-- **npm** (optional, only needed for dependency vulnerability auditing)
-
----
-
-## Closing note
-
-Built for the ZKNet ecosystem.
-
----
-
-*"Trust, but verify." — every vibe needs a check.*
+- **Node.js 18+**
+- npm dependencies: `@modelcontextprotocol/sdk`, `zod`, `glob`, `minimatch`
