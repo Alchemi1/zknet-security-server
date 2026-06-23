@@ -6,8 +6,8 @@ Part of the **ZKNet Security Audit Toolkit** — a two-part system:
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **zkn-security-server** (this) | `mcp-servers/zkn-security-server/` | MCP server + CLI for ZK-specific rule auditing (Node.js) |
-| **zknet-audit-toolkit** | `src/ETHERIX/zknet-audit-toolkit/` | Python CLI for general web/backend security scanning (17 checks) |
+| **zkn-security-server** (this) | `zkn-security-server` | MCP server + CLI for ZK-specific rule auditing (Node.js) |
+| **zknet-audit-toolkit** | `zknet-audit-toolkit` | Python CLI for general web/backend security scanning (17 checks) |
 
 ---
 
